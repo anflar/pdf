@@ -17,21 +17,49 @@ type Page struct {
 	fontcache map[string]Font
 }
 
+
+
+func (r *Reader) Page(num int) Page {
+	num-- // now 0-indexed
+	page, err := r.Trailer().Walk("Root", "Pages")
+    if err != nil{
+        return Page {}
+    }
+
+    if !page.IsType("Pages"){
+        return Page {}
+    }
+
+    //TODO: make this function recursive 
+}
 // Page returns the page for the given page number.
 // Page numbers are indexed starting at 1, not 0.
 // If the page is not found, Page returns a Page with p.V.IsNull().
-func (r *Reader) Page(num int) Page {
+func (r *Reader) Page_OLD(num int) Page {
 	num-- // now 0-indexed
-	page := r.Trailer().Key("Root").Key("Pages")
+	page, err := r.Trailer().Walk("Root", "Pages")
+    if err != nil{
+        return Page {}
+    }
 Search:
-	for page.Key("Type").Name() == "Pages" {
-		count := int(page.Key("Count").Int64())
+	for {
+        if !page.IsType("Pages") {
+            break
+        }
+		count, _ := page.Int("Count")
 		if count < num {
 			return Page{}
 		}
-		kids := page.Key("Kids")
+		kids, err := page.Key("Kids")
+        if err != nil {
+            return Page{}
+        }
 		for i := 0; i < kids.Len(); i++ {
-			kid := kids.Index(i)
+			kid, err := kids.Index(i)
+            if err != nil {
+               return Page{} 
+            }
+        
 			if kid.Key("Type").Name() == "Pages" {
 				c := int(kid.Key("Count").Int64())
 				if num < c {
@@ -55,16 +83,19 @@ Search:
 
 // NumPage returns the number of pages in the PDF file.
 func (r *Reader) NumPage() int {
-	return int(r.Trailer().Key("Root").Key("Pages").Key("Count").Int64())
+    num, _ := r.Trailer().Int("Root", "Pages", "Count")
+	return num
 }
 
-func (p Page) findInherited(key string) Value {
-	for v := p.V; !v.IsNull(); v = v.Key("Parent") {
-		if r := v.Key(key); !r.IsNull() {
-			return r
-		}
+func (p Page) findInherited(key string) (Value, error) {
+	for v := p.V; !v.IsNull(); v, _ = v.Key("Parent") {
+        r, err := v.Key(key)
+	    if err != nil {
+            return Value{}, err
+        }
+        return r, nil
 	}
-	return Value{}
+	return Value{}, nil
 }
 
 func (p Page) MediaBox() Value {
@@ -274,7 +305,6 @@ func (p Page) Content() Content {
 			default:
 				fmt.Println(op, args)
 				panic("bad g.Tm")
-				return
 			case "y":
 				fallthrough
 			case "v":
@@ -333,7 +363,7 @@ func (p Page) Content() Content {
 				}
 				x, y, w, h = args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
 				lw := math.Sqrt(g.CTM[0][0]*g.CTM[0][0] + g.CTM[1][0]*g.CTM[1][0])
-				paths = append(paths, Path{"rect", []Point{Point{x, y}, Point{x + w, y + h}}, Point{x, y}, g.JoinStyle, g.CapStyle, lw * g.LineWidth})
+				paths = append(paths, Path{"rect", []Point{{x, y}, {x + w, y + h}}, Point{x, y}, g.JoinStyle, g.CapStyle, lw * g.LineWidth})
 
 			case "q": // save graphics state
 				gstack = append(gstack, g)

@@ -337,7 +337,6 @@ Parse:
 							continue Parse
 						}
 					}
-					fmt.Println("no text for %q", text)
 					r = append(r, PositionedChar{[]rune{noRune}, 0})
 					continue Parse
 				}
