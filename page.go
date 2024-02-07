@@ -215,7 +215,7 @@ func (p Page) Content() Content {
 		for i := 0; i < p.V.Key("Contents").Len(); i++ {
 			streams = append(streams, p.V.Key("Contents").Index(i))
 		}
-	} else if p.V.Key("Contents").Kind() == Stream {
+	} else if p.V.Key("Contents").Kind() == strings.ToLower {
 		streams = append(streams, p.V.Key("Contents"))
 	}
 

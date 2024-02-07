@@ -23,16 +23,16 @@ import (
 //
 type token interface{}
 
-// A name is a PDF name, without the leading slash.
-type name string
+// A pdfname is a PDF pdfname, without the leading slash.
+type pdfname string
 
-// A keyword is a PDF keyword.
+// A pdfkeyword is a PDF pdfkeyword.
 // Delimiter tokens used in higher-level syntax,
 // such as "<<", ">>", "[", "]", "{", "}", are also treated as keywords.
-type keyword string
+type pdfkeyword string
 
-// A buffer holds buffered input bytes from the PDF file.
-type buffer struct {
+// A pdfbuffer holds buffered input bytes from the PDF file.
+type pdfbuffer struct {
 	r           io.Reader // source of data
 	buf         []byte    // buffered data
 	pos         int       // read index in buf
@@ -45,12 +45,12 @@ type buffer struct {
 	eof         bool
 	key         []byte
 	useAES      bool
-	objptr      objptr
+	objptr      pdfobjptr
 }
 
-// newBuffer returns a new buffer reading from r at the given offset.
-func newBuffer(r io.Reader, offset int64) *buffer {
-	return &buffer{
+// newPdfBuffer returns a new buffer reading from r at the given offset.
+func newPdfBuffer(r io.Reader, offset int64) *pdfbuffer {
+	return &pdfbuffer{
 		r:           r,
 		offset:      offset,
 		buf:         make([]byte, 0, 4096),
@@ -59,14 +59,14 @@ func newBuffer(r io.Reader, offset int64) *buffer {
 	}
 }
 
-func (b *buffer) seek(offset int64) {
+func (b *pdfbuffer) seek(offset int64) {
 	b.offset = offset
 	b.buf = b.buf[:0]
 	b.pos = 0
 	b.unread = b.unread[:0]
 }
 
-func (b *buffer) readByte() byte {
+func (b *pdfbuffer) readByte() byte {
 	if b.pos >= len(b.buf) {
 		b.reload()
 		if b.pos >= len(b.buf) {
@@ -78,11 +78,11 @@ func (b *buffer) readByte() byte {
 	return c
 }
 
-func (b *buffer) errorf(format string, args ...interface{}) {
+func (b *pdfbuffer) errorf(format string, args ...interface{}) {
 	panic(fmt.Errorf(format, args...))
 }
 
-func (b *buffer) reload() bool {
+func (b *pdfbuffer) reload() bool {
 	n := cap(b.buf) - int(b.offset%int64(cap(b.buf)))
 	n, err := b.r.Read(b.buf[:n])
 	if n == 0 && err != nil {
@@ -101,7 +101,7 @@ func (b *buffer) reload() bool {
 	return true
 }
 
-func (b *buffer) seekForward(offset int64) {
+func (b *pdfbuffer) seekForward(offset int64) {
 	for b.offset < offset {
 		if !b.reload() {
 			return
@@ -110,21 +110,21 @@ func (b *buffer) seekForward(offset int64) {
 	b.pos = len(b.buf) - int(b.offset-offset)
 }
 
-func (b *buffer) readOffset() int64 {
+func (b *pdfbuffer) readOffset() int64 {
 	return b.offset - int64(len(b.buf)) + int64(b.pos)
 }
 
-func (b *buffer) unreadByte() {
+func (b *pdfbuffer) unreadByte() {
 	if b.pos > 0 {
 		b.pos--
 	}
 }
 
-func (b *buffer) unreadToken(t token) {
+func (b *pdfbuffer) unreadToken(t token) {
 	b.unread = append(b.unread, t)
 }
 
-func (b *buffer) readToken() token {
+func (b *pdfbuffer) readToken() token {
 	
 	if n := len(b.unread); n > 0 {
 		t := b.unread[n-1]
@@ -154,7 +154,7 @@ func (b *buffer) readToken() token {
 	switch c {
 	case '<':
 		if b.readByte() == '<' {
-			return keyword("<<")
+			return pdfkeyword("<<")
 		}
 		b.unreadByte()
 		return b.readHexString()
@@ -163,14 +163,14 @@ func (b *buffer) readToken() token {
 		return b.readLiteralString()
 
 	case '[', ']', '{', '}':
-		return keyword(string(c))
+		return pdfkeyword(string(c))
 
 	case '/':
 		return b.readName()
 
 	case '>':
 		if b.readByte() == '>' {
-			return keyword(">>")
+			return pdfkeyword(">>")
 		}
 		b.unreadByte()
 		fallthrough
@@ -186,7 +186,7 @@ func (b *buffer) readToken() token {
 	}
 }
 
-func (b *buffer) readHexString() token {
+func (b *pdfbuffer) readHexString() token {
 	tmp := b.tmp[:0]
 	for {
 	Loop:
@@ -225,7 +225,7 @@ func unhex(b byte) int {
 	return -1
 }
 
-func (b *buffer) readLiteralString() token {
+func (b *pdfbuffer) readLiteralString() token {
 	tmp := b.tmp[:0]
 	depth := 1
 Loop:
@@ -287,7 +287,7 @@ Loop:
 	return string(tmp)
 }
 
-func (b *buffer) readName() token {
+func (b *pdfbuffer) readName() token {
 	tmp := b.tmp[:0]
 	for {
 		c := b.readByte()
@@ -306,10 +306,10 @@ func (b *buffer) readName() token {
 		tmp = append(tmp, c)
 	}
 	b.tmp = tmp
-	return name(string(tmp))
+	return pdfname(string(tmp))
 }
 
-func (b *buffer) readKeyword() token {
+func (b *pdfbuffer) readKeyword() token {
 	tmp := b.tmp[:0]
 	for {
 		c := b.readByte()
@@ -339,7 +339,7 @@ func (b *buffer) readKeyword() token {
 		}
 		return x
 	}
-	return keyword(string(tmp))
+	return pdfkeyword(string(tmp))
 }
 
 func isInteger(s string) bool {
@@ -377,7 +377,7 @@ func isReal(s string) bool {
 	return ndot == 1
 }
 
-// An object is a PDF syntax object, one of the following Go types:
+// An pdfobject is a PDF syntax pdfobject, one of the following Go types:
 //
 //	bool, a PDF boolean
 //	int64, a PDF integer
@@ -387,35 +387,35 @@ func isReal(s string) bool {
 //	dict, a PDF dictionary
 //	array, a PDF array
 //	stream, a PDF stream
-//	objptr, a PDF object reference
-//	objdef, a PDF object definition
+//	objptr, a PDF pdfobject reference
+//	objdef, a PDF pdfobject definition
 //
-// An object may also be nil, to represent the PDF null.
-type object interface{}
+// An pdfobject may also be nil, to represent the PDF null.
+type pdfobject interface{}
 
-type dict map[name]object
+type pdfdict map[pdfname]pdfobject
 
-type array []object
+type pdfarray []pdfobject
 
-type stream struct {
-	hdr    dict
-	ptr    objptr
+type pdfstream struct {
+	hdr    pdfdict
+	ptr    pdfobjptr
 	offset int64
 }
 
-type objptr struct {
+type pdfobjptr struct {
 	id  uint32
 	gen uint16
 }
 
-type objdef struct {
-	ptr objptr
-	obj object
+type pdfobjdef struct {
+	ptr pdfobjptr
+	obj pdfobject
 }
 
-func (b *buffer) readObject() object {
+func (b *pdfbuffer) readObject() pdfobject {
 	tok := b.readToken()
-	if kw, ok := tok.(keyword); ok {
+	if kw, ok := tok.(pdfkeyword); ok {
 		switch kw {
 		case "null":
 			return nil
@@ -441,21 +441,21 @@ func (b *buffer) readObject() object {
 		if t2, ok := tok2.(int64); ok && int64(uint16(t2)) == t2 {
 			tok3 := b.readToken()
 			switch tok3 {
-			case keyword("R"):
-				return objptr{uint32(t1), uint16(t2)}
-			case keyword("obj"):
+			case pdfkeyword("R"):
+				return pdfobjptr{uint32(t1), uint16(t2)}
+			case pdfkeyword("obj"):
 				old := b.objptr
-				b.objptr = objptr{uint32(t1), uint16(t2)}
+				b.objptr = pdfobjptr{uint32(t1), uint16(t2)}
 				obj := b.readObject()
-				if _, ok := obj.(stream); !ok {
+				if _, ok := obj.(pdfstream); !ok {
 					tok4 := b.readToken()
-					if tok4 != keyword("endobj") {
+					if tok4 != pdfkeyword("endobj") {
 						b.errorf("missing endobj after indirect object definition")
 						b.unreadToken(tok4)
 					}
 				}
 				b.objptr = old
-				return objdef{objptr{uint32(t1), uint16(t2)}, obj}
+				return pdfobjdef{pdfobjptr{uint32(t1), uint16(t2)}, obj}
 			}
 			b.unreadToken(tok3)
 		}
@@ -464,11 +464,11 @@ func (b *buffer) readObject() object {
 	return tok
 }
 
-func (b *buffer) readArray() object {
-	var x array
+func (b *pdfbuffer) readArray() pdfobject {
+	var x pdfarray
 	for {
 		tok := b.readToken()
-		if tok == nil || tok == keyword("]") {
+		if tok == nil || tok == pdfkeyword("]") {
 			break
 		}
 		b.unreadToken(tok)
@@ -477,14 +477,14 @@ func (b *buffer) readArray() object {
 	return x
 }
 
-func (b *buffer) readDict() object {
-	x := make(dict)
+func (b *pdfbuffer) readDict() pdfobject {
+	x := make(pdfdict)
 	for {
 		tok := b.readToken()
-		if tok == nil || tok == keyword(">>") {
+		if tok == nil || tok == pdfkeyword(">>") {
 			break
 		}
-		n, ok := tok.(name)
+		n, ok := tok.(pdfname)
 		if !ok {
 			b.errorf("unexpected non-name key %T(%v) parsing dictionary", tok, tok)
 			continue
@@ -497,7 +497,7 @@ func (b *buffer) readDict() object {
 	}
 
 	tok := b.readToken()
-	if tok != keyword("stream") {
+	if tok != pdfkeyword("stream") {
 		b.unreadToken(tok)
 		return x
 	}
@@ -513,7 +513,7 @@ func (b *buffer) readDict() object {
 		b.errorf("stream keyword not followed by newline")
 	}
 
-	return stream{x, b.objptr, b.readOffset()}
+	return pdfstream{x, b.objptr, b.readOffset()}
 }
 
 func isSpace(b byte) bool {

@@ -43,7 +43,7 @@ func (stk *Stack) Get() Value {
 }
 
 func newDict() Value {
-	return Value{nil, objptr{}, make(dict)}
+	return Value{nil, pdfobjptr{}, make(pdfdict)}
 }
 
 // Interpret interprets the content in a stream as a basic PostScript program,
@@ -62,12 +62,12 @@ func newDict() Value {
 //
 func Interpret(strm Value, do func(stk *Stack, op string)) {
 	rd := strm.Reader()
-	b := newBuffer(rd, 0)
+	b := newPdfBuffer(rd, 0)
 	b.allowEOF = true
 	b.allowObjptr = false
 	b.allowStream = false
 	var stk Stack
-	var dicts []dict
+	var dicts []pdfdict
 
 Reading:
 	for {
@@ -77,14 +77,14 @@ Reading:
 		if tok == io.EOF {
 			break
 		}
-		if kw, ok := tok.(keyword); ok {
+		if kw, ok := tok.(pdfkeyword); ok {
 			switch kw {
 			case "null", "[", "]", "<<", ">>":
 				break
 			default:
 				for i := len(dicts) - 1; i >= 0; i-- {
-					if v, ok := dicts[i][name(kw)]; ok {
-						stk.Push(Value{nil, objptr{}, v})
+					if v, ok := dicts[i][pdfname(kw)]; ok {
+						stk.Push(Value{nil, pdfobjptr{}, v})
 						continue Reading
 					}
 				}
@@ -92,20 +92,20 @@ Reading:
 				continue
 			case "dict":
 				stk.Pop()
-				stk.Push(Value{nil, objptr{}, make(dict)})
+				stk.Push(Value{nil, pdfobjptr{}, make(pdfdict)})
 				continue
 			case "currentdict":
 				if len(dicts) == 0 {
 					panic("no current dictionary")
 				}
-				stk.Push(Value{nil, objptr{}, dicts[len(dicts)-1]})
+				stk.Push(Value{nil, pdfobjptr{}, dicts[len(dicts)-1]})
 				continue
 			case "begin":
 				d := stk.Pop()
 				if d.Kind() != Dict {
 					panic("cannot begin non-dict")
 				}
-				dicts = append(dicts, d.data.(dict))
+				dicts = append(dicts, d.data.(pdfdict))
 				continue
 			case "end":
 				if len(dicts) <= 0 {
@@ -118,7 +118,7 @@ Reading:
 					panic("def without open dict")
 				}
 				val := stk.Pop()
-				key, ok := stk.Pop().data.(name)
+				key, ok := stk.Pop().data.(pdfname)
 				if !ok {
 					panic("def of non-name")
 				}
@@ -134,7 +134,7 @@ Reading:
 		}
 		b.unreadToken(tok)
 		obj := b.readObject()
-		stk.Push(Value{nil, objptr{}, obj})
+		stk.Push(Value{nil, pdfobjptr{}, obj})
 	}
 }
 
