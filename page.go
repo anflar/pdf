@@ -21,12 +21,12 @@ type Page struct {
 
 func (r *Reader) Page(num int) Page {
 	num-- // now 0-indexed
-	page, err := r.Trailer().Walk("Root", "Pages")
-    if err != nil{
+	page := r.Trailer.Key("Root").Key("Pages")
+    if page.err != nil{
         return Page {}
     }
 
-    if !page.IsType("Pages"){
+    if page.Key("Type").CoerceString("") != "Pages"{
         return Page {}
     }
 
@@ -37,26 +37,26 @@ func (r *Reader) Page(num int) Page {
 // If the page is not found, Page returns a Page with p.V.IsNull().
 func (r *Reader) Page_OLD(num int) Page {
 	num-- // now 0-indexed
-	page, err := r.Trailer().Walk("Root", "Pages")
-    if err != nil{
+	page := r.Trailer.Key("Root").Key("Pages")
+    if page.err != nil{
         return Page {}
     }
 Search:
 	for {
-        if !page.IsType("Pages") {
+        if page.Key("Type").CoerceString("") != "Pages"{
             break
         }
-		count, _ := page.Int("Count")
+		count := page.Key("Count").CoerceInt64(-1)
 		if count < num {
 			return Page{}
 		}
-		kids, err := page.Key("Kids")
-        if err != nil {
+		kids := page.Key("Kids")
+        if kids.err != nil {
             return Page{}
         }
 		for i := 0; i < kids.Len(); i++ {
-			kid, err := kids.Index(i)
-            if err != nil {
+			kid := kids.Index(i)
+            if kid.err != nil {
                return Page{} 
             }
         
@@ -88,7 +88,7 @@ func (r *Reader) NumPage() int {
 }
 
 func (p Page) findInherited(key string) (Value, error) {
-	for v := p.V; !v.IsNull(); v, _ = v.Key("Parent") {
+	for v := p.V; v.Kind() != Null; v, _ = v.Key("Parent") {
         r, err := v.Key(key)
 	    if err != nil {
             return Value{}, err
@@ -215,14 +215,14 @@ func (p Page) Content() Content {
 		for i := 0; i < p.V.Key("Contents").Len(); i++ {
 			streams = append(streams, p.V.Key("Contents").Index(i))
 		}
-	} else if p.V.Key("Contents").Kind() == strings.ToLower {
+	} else if p.V.Key("Contents").Kind() == Stream {
 		streams = append(streams, p.V.Key("Contents"))
 	}
 
 	// Estimate amount of paths based on heuristic
 	sl := int64(0)
 	for i := 0; i < len(streams); i++ {
-		sl += streams[len(streams)-1].Key("Length").Int64()
+		sl += streams[len(streams)-1].Key("Length").CoerceInt64(0)
 	}
 
 	paths = make([]Path, sl/10)
@@ -308,7 +308,7 @@ func (p Page) Content() Content {
 			case "y":
 				fallthrough
 			case "v":
-				g.Px, g.Py = args[2].Float64(), args[3].Float64()
+				g.Px, g.Py = args[2].CoerceFloat64(0), args[3].CoerceFloat64(0)
 			case "c":
 				x1, y1, x2, y2, x3, y3, x4, y4 = g.Px, g.Py, args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64(), args[4].Float64(), args[5].Float64()
 				g.Px, g.Py = x4, y4

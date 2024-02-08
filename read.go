@@ -43,7 +43,7 @@
 // they are implemented only in terms of the Value API and could be moved outside
 // the package. Equally important, traversal of other PDF data structures can be implemented
 // in other packages as needed.
-//
+
 package pdf // import "rsc.io/pdf"
 
 // BUG(rsc): The package is incomplete, although it has been used successfully on some
@@ -160,7 +160,7 @@ func NewReaderEncrypted(f io.ReaderAt, size int64, pw func() string) (*Reader,er
 		return nil, err
 	}
 	r.xref = xref
-    r.Trailer = Value{r, trailerptr, trailer} 
+    r.Trailer = Value{r, trailerptr, trailer, nil} 
 	//r.trailer = trailer
 	//r.trailerptr = trailerptr
 	if trailer["Encrypt"] == nil {
@@ -239,15 +239,14 @@ func readXrefStream(r *Reader, b *pdfbuffer) ([]xref, pdfobjptr, pdfdict, error)
 			return nil, pdfobjptr{}, nil, fmt.Errorf("malformed PDF: xref prev stream not found: %v", objfmt(obj))
 		}
 		prevoff = prevstrm.hdr["Prev"]
-		prev := Value{r, pdfobjptr{}, prevstrm}
+		prev := Value{r, pdfobjptr{}, prevstrm, nil}
 		if prev.Kind() != Stream {
 			return nil, pdfobjptr{}, nil, fmt.Errorf("malformed PDF: xref prev stream is not stream: %v", prev)
 		}
-        name, _ := prev.Name("Type")
-		if name != "XRef" {
+        if prev.Key("Type").CoerceString("") != "XRef" {
 			return nil, pdfobjptr{}, nil, fmt.Errorf("malformed PDF: xref prev stream does not have type XRef")
 		}
-		psize, err := prev.Int64("Size")
+		psize, err := prev.Key("Size").Int64()
         if err != nil {
             return nil, pdfobjptr{}, nil, err
         }
@@ -287,7 +286,7 @@ func readXrefStreamData(r *Reader, strm pdfstream, table []xref, size int64) ([]
 		return nil, fmt.Errorf("invalid W array %v", objfmt(ww))
 	}
 
-	v := Value{r, pdfobjptr{}, strm}
+	v := Value{r, pdfobjptr{}, strm, nil}
 	wtotal := 0
 	for _, wid := range w {
 		wtotal += wid
@@ -439,16 +438,13 @@ func findLastLine(buf []byte, s string) int {
 
 // A Value is a single PDF value, such as an integer, dictionary, or array.
 // The zero Value is a PDF null (Kind() == Null, IsNull() = true).
+// Keeping error state enables us to chain functions until a final resolving
+// function where we can return the error object.
 type Value struct {
 	r    *Reader
 	ptr  pdfobjptr
 	data interface{}
-}
-
-
-// IsNull reports whether the value is a null. It is equivalent to Kind() == Null.
-func (v Value) IsNull() bool {
-	return v.data == nil
+    err error
 }
 
 // A ValueKind specifies the kind of data underlying a Value.
@@ -490,6 +486,46 @@ func (v Value) Kind() ValueKind {
 		return Stream
 	}
 }
+/*
+func Convert[T any](v Value) (T, error) {
+   var ret T 
+   var ok bool
+	switch v.data.(type) {
+	default:
+		return ret, nil
+	case bool, int64, float64, string, pdfname:
+        ret, ok = v.data.(T)
+	case pdfdict:
+        ret, ok = v.data.(T)
+	case pdfarray:
+        ret, ok = v.data.(T)
+	case pdfstream:
+        ret, ok = v.data.(T)
+	}
+   
+    if ok{
+        return ret, nil
+    } else {
+        return ret, fmt.Errorf("Unexpected type found during conversion of pdf type to go type.")
+    }
+}
+
+func Coerce[T any](v Value, fallback T) T {
+    ret, err2 := Convert[T](v)
+    if err2 != nil {
+        return fallback
+    }
+    return ret
+}
+func Equals[T comparable](v Value, v2 T) bool {
+    if v.Kind() == Null{
+        return false 
+    }
+    var ret T
+    ret, ok := v.data.(T)
+    return ok && ret==v2
+}
+*/
 
 // String returns a textual representation of the value v.
 // Note that String is not the accessor for values with Kind() == String.
@@ -556,6 +592,7 @@ func objfmt(x interface{}) string {
 	}
 }
 
+/*
 // Bool returns v's boolean value.
 // If v.Kind() != Bool, Bool returns false.
 func (v Value) Bool() bool {
@@ -583,19 +620,14 @@ func (v Value) Int(path ...interface{}) (int, error) {
     }
     return val, nil
 }
-
+*/
 // Int64 returns v's int64 value.
 // If v.Kind() != Int64, Int64 returns 0.
-func (v Value) Int64(path ...interface{}) (int64, error) {
-    var err error
-    v2 := v
-    if len(path) > 0{
-        v2, err = v.Walk(path...)
-        if err != nil {
-            return 0, err 
-        }
+func (v Value) Int64() (int64, error) {
+    if v.err != nil{
+        return 0, v.err
     }
-    val, ok := v2.data.(int64)
+    val, ok := v.data.(int64)
     if !ok {
         return 0, fmt.Errorf("Could not cast into int64")
     }
@@ -604,28 +636,47 @@ func (v Value) Int64(path ...interface{}) (int64, error) {
 
 // Float64 returns v's float64 value, converting from integer if necessary.
 // If v.Kind() != Float64 and v.Kind() != Int64, Float64 returns 0.
-func (v Value) Float64() float64 {
+func (v Value) Float64() (float64, error) {
+    if v.err != nil{
+        return 0, v.err
+    }
 	x, ok := v.data.(float64)
 	if !ok {
 		x, ok := v.data.(int64)
 		if ok {
-			return float64(x)
+			return float64(x), nil
 		}
-		return 0
+		return 0, fmt.Errorf("Type conversion error")
 	}
-	return x
+	return x, nil
 }
 
 // RawString returns v's string value.
 // If v.Kind() != String, RawString returns the empty string.
-func (v Value) RawString() string {
+func (v Value) RawString() (string, error) {
+    if v.err != nil {
+        return "", v.err
+    }
 	x, ok := v.data.(string)
 	if !ok {
-		return ""
+		return "", fmt.Errorf("Type conversion error")
+	}
+	return x, nil
+}
+
+// RawString returns v's string value.
+// If v.Kind() != String, RawString returns the empty string.
+func (v Value) CoerceString(fallback string) (string) {
+    if v.err != nil {
+        return fallback
+    }
+	x, ok := v.data.(string)
+	if !ok {
+		return fallback
 	}
 	return x
 }
-
+/*
 // Text returns v's string value interpreted as a ``text string'' (defined in the PDF spec)
 // and converted to UTF-8.
 // If v.Kind() != String, Text returns the empty string.
@@ -681,81 +732,27 @@ func (v Value) Name(path ...interface{}) (string, error) {
 	}
 	return string(x), nil
 }
+*/
 
 // Key returns the value associated with the given name key in the dictionary v.
 // Like the result of the Name method, the key should not include a leading slash.
 // If v is a stream, Key applies to the stream's header dictionary.
 // If v.Kind() != Dict and v.Kind() != Stream, Key returns a null Value.
 var ErrNotAValidStream = errors.New("Not a valid stream object")
-func (v Value) Key(key string) (Value, error) {
+func (v Value) Key(key string) (Value) {
 	x, ok := v.data.(pdfdict)
 	if !ok {
 		strm, ok := v.data.(pdfstream)
 		if !ok {
-			return Value{}, ErrNotAValidStream
+            return Value{err:ErrNotAValidStream}
 		}
 		x = strm.hdr
 	}
 	return v.r.resolve(v.ptr, x[pdfname(key)])
 }
 
-type WalkType int
 
-const (
-    WalkChildren = iota
-    WalkInherited
-)
-
-
-func (v Value) DoWalkChildren(path ...interface{}) (Value, error) {
-    current := v
-    for _, p := range path[:len(path)-1] { // Adjust loop to exclude the last path element for special handling
-        switch p := p.(type) {
-        case string:
-            var err error
-            current, err = current.Key(p)
-            if err != nil {
-                return Value{}, err
-            }
-        case int:
-            var err error
-            current, err = current.Index(p)
-            if err != nil {
-                return Value{}, err
-            }
-        default:
-            return Value{}, fmt.Errorf("unsupported path element type %T", p)
-        }
-    }
-    // Apply the type assertion function to the final Value
-    return current, nil
-}
-
-func (v Value) Walk(path ...interface{}) (Value, error) {
-    var wt WalkType = WalkChildren
-
-    if len(path) == 0 {
-        return v, nil
-    }
-    switch path[0].(type){
-    case WalkType:
-        extracted, ok := path[0].(WalkType)
-        if ok{
-            wt = extracted
-            path = path[1:]
-            switch (wt){
-            case WalkChildren:
-                return v.DoWalkChildren(path...)
-            case WalkInherited:
-                panic("WalkInherited not implemented yet!")
-            }
-        }
-    default:
-        //2 
-    }
-    return v.DoWalkChildren(path...)
-}
-
+/*
 // Keys returns a sorted list of the keys in the dictionary v.
 // If v is a stream, Keys applies to the stream's header dictionary.
 // If v.Kind() != Dict and v.Kind() != Stream, Keys returns nil.
@@ -775,21 +772,29 @@ func (v Value) Keys() []string {
 	sort.Strings(keys)
 	return keys
 }
+*/
 
 // Index returns the i'th element in the array v.
 // If v.Kind() != Array or if i is outside the array bounds,
 // Index returns a null Value.
-func (v Value) Index(i int) (Value, error) {
+func (v Value) Index(i int) (Value) {
+    if v.err != nil {
+        return Value{err:v.err}
+    }
 	x, ok := v.data.(pdfarray)
 	if !ok || i < 0 || i >= len(x) {
-		return Value{}, ErrNotAValidStream
+        return Value{err:ErrNotAValidStream}
 	}
 	return v.r.resolve(v.ptr, x[i])
 }
 
 // Len returns the length of the array v.
 // If v.Kind() != Array, Len returns 0.
+// We define Len(error) = 0
 func (v Value) Len() int {
+    if v.err != nil{
+        return 0
+    }
 	x, ok := v.data.(pdfarray)
 	if !ok {
 		return 0
@@ -804,50 +809,53 @@ var ErrExtendsNotValidStream = errors.New("Stream contains Extends property, but
 var ErrObjectOutOfBounds = errors.New("Object out of bounds")
 var ErrUnexpectedValueType = errors.New("Unexpected value type %T in resolve")
 
-func (r *Reader) resolve(parent pdfobjptr, x interface{}) (Value, error){
+func (r *Reader) resolve(parent pdfobjptr, x interface{}) Value{
     //First handle easy cases
     ptr, ok := x.(pdfobjptr)
     if !ok {
         switch x := x.(type) {
         case nil, bool, int64, float64, pdfname, pdfdict, pdfarray, pdfstream:
-            return Value{r, parent, x}, nil
+            return Value{r:r, ptr:parent, data:x, err:nil}
         case string:
-            return Value{r, parent, x}, nil
+            return Value{r:r, ptr:parent, data:x, err:nil}
         default:
-            return Value{}, ErrUnexpectedValueType
+            return Value{err:ErrUnexpectedValueType}
         }
     }
     
     if ptr.id >= uint32(len(r.xref)) {
-        return Value{}, ErrObjectOutOfBounds
+        return Value{err:ErrObjectOutOfBounds}
     }
     xref := r.xref[ptr.id]
     if xref.ptr != ptr || !xref.inStream && xref.offset == 0 {
-        return Value{}, nil
+        return Value{err:fmt.Errorf("Unknown error")}
     }
     var obj pdfobject
     if xref.inStream {
-        strm, err := r.resolve(parent, xref.stream)
-        if err != nil {
-            return Value{}, err
+        strm := r.resolve(parent, xref.stream)
+        if strm.err != nil {
+            return strm
         }
     Search:
         for {
             if strm.Kind() != Stream {
-                return Value{}, ErrNotAStream
+                return Value{err:ErrNotAStream} 
             }
-            name, _ := strm.Name("Type")
+            name := strm.Key("Type").CoerceString("")
             if name != "ObjStm" {
                 panic("not an object stream")
             }
-            n, _ := strm.Int("N")
-            first, err := strm.Int64("First")
+            n, err := strm.Key("N").Int64()
+            if err != nil {
+                panic("some error occurred")
+            }
+            first, err := strm.Key("First").Int64()
             if err != nil{
                 panic("missing First")
             }
             b := newPdfBuffer(strm.Reader(), 0)
             b.allowEOF = true
-            for i := 0; i < n; i++ {
+            for i := int64(0); i < n; i++ {
                 id, _ := b.readToken().(int64)
                 off, _ := b.readToken().(int64)
                 if uint32(id) == ptr.id {
@@ -856,8 +864,8 @@ func (r *Reader) resolve(parent pdfobjptr, x interface{}) (Value, error){
                     break Search
                 }
             }
-            ext, err := strm.Key("Extends")
-            if err != nil {
+            ext := strm.Key("Extends")
+            if ext.err != nil {
                 panic("error reading stream")
             }
             if ext.Kind() != Stream {
@@ -884,11 +892,11 @@ func (r *Reader) resolve(parent pdfobjptr, x interface{}) (Value, error){
 
     switch x := x.(type) {
     case nil, bool, int64, float64, pdfname, pdfdict, pdfarray, pdfstream:
-        return Value{r, parent, x}, nil
+        return Value{r, parent, x, nil}
     case string:
-        return Value{r, parent, x}, nil
+        return Value{r, parent, x, nil}
     default:
-        return Value{}, ErrUnexpectedValueType
+        return Value{err:ErrUnexpectedValueType}
     }
 }
 
@@ -913,25 +921,28 @@ func (v Value) Reader() io.ReadCloser {
 		return &errorReadCloser{fmt.Errorf("stream not present")}
 	}
 	var rd io.Reader
-    length, _ :=  v.Int64("Length")
+    length, err :=  v.Key("Length").Int64()
+    if err != nil {
+        panic("Some error occurred reading length")
+    }
 	rd = io.NewSectionReader(v.r.f, x.offset, length)
 	if v.r.key != nil {
 		rd = decryptStream(v.r.key, v.r.useAES, x.ptr, rd)
 	}
-	filter, _ := v.Key("Filter")
-	param, _ := v.Key("DecodeParms")
+	filter := v.Key("Filter")
+	param := v.Key("DecodeParms")
 	switch filter.Kind() {
 	default:
 		panic(fmt.Errorf("unsupported filter %v", filter))
 	case Null:
 		// ok
 	case Name:
-        name, _ := filter.Name()
+        name, _ := filter.RawString()
 		rd = applyFilter(rd, name, param)
 	case Array:
 		for i := 0; i < filter.Len(); i++ {
-            flt, _ := filter.Index(i)
-            name, _ := flt.Name()
+            flt := filter.Index(i)
+            name := flt.CoerceString("")
 			rd = applyFilter(rd, name, flt)
 		}
 	}
@@ -948,11 +959,11 @@ func applyFilter(rd io.Reader, name string, param Value) io.Reader {
 		if err != nil {
 			panic(err)
 		}
-		pred, err := param.Int64("Predictor")
+		pred, err := param.Key("Predictor").Int64()
         if err != nil {
             return zr
         }
-		columns, err := param.Int64("Columns")
+		columns, err := param.Key("Columns").Int64()
         if err != nil{
             columns = 1
         }
@@ -1008,9 +1019,9 @@ var passwordPad = []byte{
 
 func (r *Reader) initEncrypt(password string) error {
 	// See PDF 32000-1:2008, §7.6.
-    e, err := r.Trailer.Key("Encrypt") //r.resolve(objptr{}, r.trailer["Encrypt"])
-    if err != nil {
-        return fmt.Errorf("Failed to resolve Encrypt key")
+    e := r.Trailer.Key("Encrypt") //r.resolve(objptr{}, r.trailer["Encrypt"])
+    if e.err != nil {
+        return errors.Join(e.err, fmt.Errorf("Failed to resolve Encrypt key"))
     }
 	encrypt, _ := e.data.(pdfdict)
 	if encrypt["Filter"] != pdfname("Standard") {
@@ -1028,14 +1039,13 @@ func (r *Reader) initEncrypt(password string) error {
 		return fmt.Errorf("unsupported PDF: encryption version V=%d; %v", V, objfmt(encrypt))
 	}
 
-	ids, err2 := r.Trailer.Key("ID")
-	if err2 != nil || ids.Len() < 1 {
+	ids := r.Trailer.Key("ID")
+	if ids.err != nil || ids.Len() < 1 {
 		return fmt.Errorf("malformed PDF: missing ID in trailer")
 	}
-	idstr1, err2 := ids.Index(0)
-    idstr := idstr1.RawString()
-	if err2 != nil {
-		return fmt.Errorf("malformed PDF: missing ID in trailer")
+	idstr, err := ids.Index(0).RawString()
+	if err != nil {
+		return fmt.Errorf("Error reading first ID index as string")
 	}
 	ID := []byte(idstr)
 
